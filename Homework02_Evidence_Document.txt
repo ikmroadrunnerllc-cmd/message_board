@@ -1,0 +1,286 @@
+================================================================================
+CSC 4360: Mobile App Development - Homework 02
+The Message Board Vault Hunt: Evidence & Reflection Document
+================================================================================
+
+Student Name: Mario Leonel Gutierrez Espinal
+Course: CSC 4360 - Mobile App Development (Fall 2026)
+Due Date: November 21, 2026
+Platform Tested: Android (Pixel Emulator / Android 14+)
+Release APK: release_apk/app-release.apk (49.5 MB)
+GitHub Repo: https://github.com/ikmroadrunnerllc-cmd/message_board
+
+--------------------------------------------------------------------------------
+1. PROJECT OVERVIEW (HOW THE APP WORKS)
+--------------------------------------------------------------------------------
+This app is a real-time message board built with Flutter and Firebase. 
+Here is how it is structured in plain English:
+
+- Splash Screen: When you open the app, it initializes Firebase. If there is a 
+  connection problem, it shows a simple Retry button.
+- Authentication (AuthService): Users can sign up with an email and password or 
+  log in. Firebase Auth handles passwords securely.
+- User Profile Record (UserService): When a user registers, we save their 
+  account info in a Cloud Firestore document under "users/{uid}". It saves:
+  1. uid (user ID)
+  2. firstName
+  3. lastName
+  4. role (Student, Faculty, or Staff)
+  5. registrationDateTime (server timestamp)
+- Profile Gate (ProfileGate): Once logged in, this screen makes sure the user 
+  actually has their 5-field profile saved in the database before sending them 
+  to the board. If the profile is missing (for example, if the internet dropped 
+  during sign up), it lets the user fill in their name and save it so they never 
+  get stuck.
+- Live Board (BoardService & BoardScreen): Shows all messages ordered from 
+  oldest to newest. It uses Firestore snapshots(), so when anyone posts a 
+  message, it pops up on everyone's screen instantly without pressing refresh.
+- Ownership & Editing: You can edit or delete your own posts. Other people's 
+  posts do not show edit or delete buttons.
+- Security Rules (firestore.rules): Even if someone tries to bypass the app 
+  and send raw database requests, Firestore rejects any attempt to edit or delete 
+  another person's message with a "permission-denied" error.
+
+--------------------------------------------------------------------------------
+2. FIRESTORE DATA MODEL (WHO WRITES WHAT)
+--------------------------------------------------------------------------------
+We keep private user info separate from public message board posts:
+
+1. Path: users/{uid}
+   - Fields: uid (string), firstName (string), lastName (string), role (string), 
+     registrationDateTime (server timestamp).
+   - Who writes it: The user who created the account, exactly once when signing up.
+   - Who can see it: Only the owner (request.auth.uid == uid). No other user 
+     can read your private profile document.
+
+2. Path: messages/{msgId}
+   - Fields: text (string), authorUid (string), authorName (string), 
+     createdAt (server timestamp), editedAt (server timestamp, optional).
+   - Who writes it: Any logged-in user who posts a message.
+   - Who can see it: Any logged-in user can read all messages on the board.
+   - Who can update/delete: Only the original author (authorUid == request.auth.uid).
+
+Why this matters:
+The server clock (FieldValue.serverTimestamp()) is used instead of the phone's 
+clock. A user's phone clock can be wrong, changed manually, or set to a different 
+timezone. The server timestamp ensures all messages appear in the true order they 
+were sent.
+
+--------------------------------------------------------------------------------
+3. VERIFICATION & TEST LOG
+--------------------------------------------------------------------------------
+Every required feature was tested on a running Android build:
+
+Test 1: App Launch & Splash Screen
+- Action: Launch the app from Android.
+- Expected: Logo appears while Firebase connects, then smoothly opens the login screen.
+- Observed: Splash screen displayed for ~1 second, initialized Firebase, and loaded 
+  the login screen with zero crashes.
+- Result: PASS
+
+Test 2: Login Input Validation
+- Action: Tap "Sign In" with empty boxes or enter a bad email address.
+- Expected: Friendly error messages tell the user what to fix without sending bad 
+  network calls.
+- Observed: App showed "Email is required" and "Password must be at least 6 characters".
+- Result: PASS
+
+Test 3: User Registration & 5-Field Profile
+- Action: Register a new user (First: Ada, Last: Lovelace, Role: Student, Email, Password).
+- Expected: Firebase Auth creates the account, and Firestore creates a document in 
+  "users/{uid}" with all 5 required fields.
+- Observed: Account created. Checking Firestore Console showed the document 
+  with uid, firstName="Ada", lastName="Lovelace", role="Student", and server timestamp.
+- Result: PASS
+
+Test 4: Real-time Live Stream (snapshots)
+- Action: Post a message from one screen or window while watching another.
+- Expected: New message appears right away without pulling to refresh or clicking a button.
+- Observed: Message appeared instantly on the screen as soon as Firestore accepted it.
+- Result: PASS
+
+Test 5: Create Message (CRUD - Create)
+- Action: Type "Hello class!" in the box and tap Send.
+- Expected: Message is saved with authorUid, authorName, text, and createdAt. Send 
+  button disables briefly while sending so you can't double-post.
+- Observed: Button disabled, message saved, input cleared, and message appeared at 
+  the bottom of the list.
+- Result: PASS
+
+Test 6: Edit Message (CRUD - Update)
+- Action: Tap "Edit" on a message I wrote, change text to "Hello class! (updated)", 
+  and tap Save.
+- Expected: Text updates in Firestore, editedAt timestamp is added, and board says (Edited).
+- Observed: Text updated immediately on screen, other users' posts were untouched.
+- Result: PASS
+
+Test 7: Delete Message (CRUD - Delete)
+- Action: Tap "Delete" on my own post and confirm.
+- Expected: Document is deleted from the messages collection; remaining messages stay intact.
+- Observed: Selected message vanished from the board. All other messages remained unchanged.
+- Result: PASS
+
+Test 8: Security Rules Blocking Unauthorized Changes (Rules Denial)
+- Action: Try to update or delete a message authored by someone else.
+- Expected: The database rejects the request with "permission-denied".
+- Observed: The UI doesn't show edit/delete buttons for other people's posts. When 
+  tested directly against the Firestore rules, the server returns "permission-denied".
+- Result: PASS
+
+Test 9: Duplicate Submit Prevention
+- Action: Rapidly double-tap the Post button.
+- Expected: Only 1 message is created, not 2 identical messages.
+- Observed: The button disables instantly on the first tap while the network call 
+  is working, preventing duplicate posts.
+- Result: PASS
+
+Test 10: Empty Board State
+- Action: Open the board when there are no messages.
+- Expected: Shows a clean message like "No messages yet. Be the first to post!" instead 
+  of a blank white screen or error.
+- Observed: Clean empty-state text displayed properly.
+- Result: PASS
+
+--------------------------------------------------------------------------------
+4. CRITICAL THINKING CASE FILES
+--------------------------------------------------------------------------------
+
+Case File 1: The Ghost Editor
+- The Situation: A message board app copied simple rules (allow read, write: if request.auth != null;). 
+  In the demo, everyone only edited their own posts because the buttons were hidden 
+  for other users' posts. But weeks later, students were able to edit and delete 
+  each other's messages.
+- Diagnosis: Hiding a button in the Flutter UI is just design (UX), NOT security. 
+  Authentication means proving who you are (having a valid login token). Authorization 
+  means checking if you have permission to touch this specific document. 
+  Because the old rule allowed ANY signed-in user to write to any message, someone using 
+  a simple web tool like Postman could send an update to any message ID and Firestore 
+  would allow it.
+- The Fix: In firestore.rules, we enforce ownership at the database level:
+    allow update, delete: if request.auth != null 
+                          && resource.data.authorUid == request.auth.uid;
+- Trade-off: Normal users can no longer edit other people's posts. If an administrator 
+  needs to moderate or remove bad posts, that must be done using a secure backend 
+  (like a Firebase Cloud Function with Admin privileges), not regular client code.
+- How to Prove It: Log in as User A. Try to run an update on User B's post. The database 
+  immediately throws FirebaseException with code "permission-denied".
+
+Case File 2: The Runaway Dupes
+- The Situation: Students on slow campus Wi-Fi kept getting double posts—two identical 
+  messages appearing minutes or hours apart.
+- Diagnosis: When network connection is bad, two things happen:
+  1. The user thinks nothing happened because the screen didn't update, so they tap 
+     Post a second time.
+  2. Firestore has offline caching. When you call collection.add(), it saves the 
+     write locally and tries to send it. If the phone loses connection, the SDK 
+     queues the request. When connection comes back, if the user already retried, 
+     both requests get sent, creating two separate documents with two different random IDs.
+- The Fix:
+  1. Disable the Post button the exact millisecond it is pressed (_posting = true).
+  2. Use a unique message ID (like authorUid + timestamp or UUID) with doc(id).set() 
+     instead of random collection.add(). If the write gets retried twice, it just 
+     updates the same document once instead of creating two separate posts.
+- Trade-off: It takes a little more code to generate unique keys, but it completely 
+  stops duplicate messages from showing up on slow internet.
+
+--------------------------------------------------------------------------------
+5. AI LAB: FLOW & LIFETIME SHOWDOWN (UNDERGRADUATE TRACK)
+--------------------------------------------------------------------------------
+- Tool Used: Google Gemini (Free Tier)
+- Date: November 15, 2026
+- Prompt Asked: Explain the beginner Flutter message board flow with Firebase Auth, 
+  user document in Firestore, authStateChanges, snapshots vs get, serverTimestamp, 
+  and suggest manual tests.
+
+My Prediction Before Asking AI:
+1. Flow: Splash screen -> AuthGate checks if user is logged in -> Login screen or Board. 
+   On sign up, save 5 fields to users/{uid}.
+2. Data Survival:
+   - Close/Kill App: User stays signed in because Firebase saves the login token on the phone.
+   - Restart Phone: Still signed in; Firestore cache holds recent messages.
+   - Clear App Data: Logs user out and wipes local cache; Firestore cloud data stays safe.
+
+Comparing With AI:
+- What the AI Got Right: It explained that authStateChanges() is a continuous stream 
+  that automatically tells your UI whenever a user logs in, logs out, or reopens the app. 
+  This confirmed that wrapping the app in a StreamBuilder at the root is much cleaner 
+  than manually pushing screens with Navigator.
+- What I Corrected (The AI Myth): The AI suggested that as soon as you call 
+  createUserWithEmailAndPassword(), you should navigate straight to the message board 
+  and write the profile in the background. 
+  Why this is flawed: Auth account creation and Firestore database writes are two 
+  separate cloud calls. If the user's internet flickers after the auth call, the user 
+  gets into the board with no profile saved in the database! 
+  How I solved it: I created ProfileGate. If the user is logged in but their profile 
+  document is missing, it prompts them to complete their name and role before entering 
+  the board.
+
+--------------------------------------------------------------------------------
+6. REFLECTION QUESTIONS
+--------------------------------------------------------------------------------
+
+Prompt 1: What did you expect vs what actually happened?
+I expected Firebase Authentication and Cloud Firestore to work as one single system. 
+In reality, they are two separate services. You can successfully create a login account, 
+but the database write can still fail if the rules or internet aren't right. That's why 
+we have ProfileGate to make sure the profile is actually saved.
+
+Prompt 2: What was a bug you had to fix, and how did you fix it?
+When building the release APK, the app couldn't talk to Firebase because the release 
+build didn't have internet access enabled in Android. 
+Fix: I opened android/app/src/main/AndroidManifest.xml and added:
+<uses-permission android:name="android.permission.INTERNET" />
+After that, the release APK connected to Firebase immediately.
+
+Prompt 3: If you had more time, what would you improve?
+I would add a dark mode toggle so it is easier on the eyes at night, and I would add 
+a search bar at the top of the message board so you can filter messages by keyword 
+or author name.
+
+Prompt 4: How did you decide what is public vs private?
+Privacy is simple:
+- Private: Everything in users/{uid} (user ID, full name, role, registration date). 
+  Only the person who owns the account can see or change this.
+- Public: The message text and author's display name on the board. Any signed-in 
+  user needs to see this so they can read the board.
+
+Prompt 5: Why use server time instead of phone time?
+A phone's clock can be set wrong, the user might be in a different timezone, or 
+someone could intentionally change their phone clock to game the post order. 
+FieldValue.serverTimestamp() lets Google's server set the time, so all messages 
+appear in the honest, correct order for everyone.
+
+Prompt 6: How would you keep this app fast as it grows?
+Right now we load the messages list. If the app grows to 10,000 messages, loading 
+them all at once would slow down the phone and cost a lot of database reads. 
+To fix this at scale, we use .limit(50) or .limit(100) and load older messages 
+only when the user scrolls to the top (pagination).
+
+--------------------------------------------------------------------------------
+7. EXTRA SPICES COMPLETED
+--------------------------------------------------------------------------------
+1. Main Spice (Required): Release Readiness Gate
+   - Built the real release APK: flutter build apk --release
+   - Output: release_apk/app-release.apk (49.5 MB)
+   - Tested on Android with Internet permissions enabled. The full flow works cleanly.
+
+2. Spice #4: Idempotent Alchemist
+   - Disabled the submit button the moment it is pressed.
+   - Prevented rapid double-clicks from creating duplicate posts.
+
+3. Spice #5: Schema Versioning
+   - Models include schemaVersion to keep data structure safe for future app updates.
+
+4. Spice #6: Batch Operations
+   - Prepared atomic batch delete functionality for managing documents safely.
+
+--------------------------------------------------------------------------------
+8. OFFICIAL REFERENCES USED
+--------------------------------------------------------------------------------
+1. Firebase Flutter Setup: https://firebase.google.com/docs/flutter/setup
+2. Firebase Authentication: https://firebase.google.com/docs/auth/flutter/start
+3. Cloud Firestore Flutter Quickstart: https://firebase.google.com/docs/firestore/quickstart#dart
+4. Firestore Realtime Listeners: https://firebase.google.com/docs/firestore/query-data/listen
+5. Firestore Security Rules: https://firebase.google.com/docs/rules
+6. Flutter Android Release Guide: https://docs.flutter.dev/deployment/android
+================================================================================
